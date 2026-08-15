@@ -4,7 +4,12 @@ from paddleocr import PaddleOCR
 SRC = os.path.expanduser("~/cartridge_detection/jpg")
 OUT = os.path.expanduser("~/cartridge_detection/phase0/ocr_dump.jsonl")
 
-ocr = PaddleOCR(use_textline_orientation=True, lang="en")
+ocr = PaddleOCR(
+    lang="en",
+    use_textline_orientation=True,
+    use_doc_orientation_classify=False,
+    use_doc_unwarping=False,
+)
 paths = sorted(glob.glob(SRC + "/*.jpg"))
 
 with open(OUT, "w") as f:
