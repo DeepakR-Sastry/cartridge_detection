@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cartridge Finder</title>
+<style>
+  :root {
+    --bg: #14161a;
+    --panel: #1e2127;
+    --line: #313640;
+    --text: #e8eaed;
+    --dim: #9aa1ac;
+    --accent: #00c853;
+    --warn: #ffab00;
+    --miss: #ff5252;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; padding: 16px 16px 64px;
+    background: var(--bg); color: var(--text);
+    font: 16px/1.4 -apple-system, system-ui, sans-serif;
+  }
+  h1 { font-size: 20px; margin: 0 0 16px; }
+  section { margin-bottom: 20px; }
+  label.hd { display: block; font-size: 13px; color: var(--dim);
+             text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px; }
+
+  button {
+    font: inherit; font-weight: 600; color: var(--text);
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 14px 16px; cursor: pointer;
+  }
+  button:active { background: #262a32; }
+  button:disabled { opacity: .45; }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; }
+
+  input[type=text] {
+    font: inherit; width: 100%; color: var(--text);
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 14px 16px;
+  }
+  input[type=text]:focus { outline: none; border-color: var(--accent); }
+  input[type=file] { display: none; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .chip {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 999px; padding: 8px 8px 8px 14px; font-weight: 600;
+  }
+  .chip span { color: var(--dim); font-size: 20px; line-height: 1; padding: 0 4px; }
+
+  .thumbs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .thumb { position: relative; width: 72px; height: 72px; }
+  .thumb img { width: 100%; height: 100%; object-fit: cover;
+               border-radius: 8px; border: 1px solid var(--line); }
+  .thumb span {
+    position: absolute; top: -6px; right: -6px;
+    width: 24px; height: 24px; border-radius: 50%;
+    background: var(--bg); border: 1px solid var(--line);
+    color: var(--dim); font-size: 16px; line-height: 22px; text-align: center;
+  }
+
+  #go { width: 100%; background: var(--accent); color: #06140a;
+        border-color: var(--accent); padding: 18px; font-size: 17px; }
+  #go:disabled { background: var(--panel); color: var(--dim);
+                 border-color: var(--line); }
+
+  .note { color: var(--dim); font-size: 14px; margin-top: 8px; }
+  .err { color: var(--miss); font-size: 14px; margin-top: 8px; }
+
+  .result {
+    display: flex; align-items: baseline; gap: 10px;
+    padding: 12px 14px; border: 1px solid var(--line);
+    border-radius: 10px; background: var(--panel); margin-bottom: 8px;
+  }
+  .result b { font-size: 18px; min-width: 76px; }
+  .result i { font-style: normal; font-size: 14px; }
+  .found  { color: var(--accent); }
+  .low    { color: var(--warn); }
+  .absent { color: var(--miss); }
+
+  figure { margin: 0 0 16px; }
+  figure img { width: 100%; border-radius: 10px; display: block; }
+  figcaption { color: var(--dim); font-size: 14px; margin-top: 6px; }
+</style>
+</head>
+<body>
+
+<h1>Cartridge Finder</h1>
+
+<section>
+  <label class="hd" for="num">Cartridges</label>
+  <input id="num" type="text" inputmode="text" autocomplete="off"
+         autocapitalize="characters" spellcheck="false"
+         placeholder="e.g. 902 or 65XL, then Enter">
+  <div class="err" id="numerr" hidden></div>
+  <div class="chips" id="chips"></div>
+</section>
+
+<section>
+  <label class="hd">Photos</label>
+  <div class="row">
+    <button id="shoot">Take photo</button>
+    <button id="pick">Choose</button>
+  </div>
+  <input id="cam" type="file" accept="image/*" capture="environment">
+  <input id="lib" type="file" accept="image/*" multiple>
+  <div class="thumbs" id="thumbs"></div>
+</section>
+
+<section>
+  <button id="go" disabled>Find</button>
+  <div class="note" id="status"></div>
+</section>
+
+<section id="out"></section>
+
+<script>
+const numInput = document.getElementById('num');
+const numErr   = document.getElementById('numerr');
+const chipsEl  = document.getElementById('chips');
+const thumbsEl = document.getElementById('thumbs');
+const goBtn    = document.getElementById('go');
+const statusEl = document.getElementById('status');
+const outEl    = document.getElementById('out');
+
+// Mirrors PRODUCT in pipeline/match.py. Keep the two in step.
+const PRODUCT = /^(\d{2,4})(XL)?$/;
+
+let queries = [];   // [{number, xl}]
+let photos  = [];   // File objects, in the order added
+
+function normalize(raw) {
+  // "65 xl" and "65Xl" and " 65XL " all become "65XL".
+  const s = raw.toUpperCase().replace(/\s+/g, '');
+  const m = PRODUCT.exec(s);
+  return m ? {number: m[1], xl: Boolean(m[2])} : null;
+}
+
+function label(q) { return q.number + (q.xl ? 'XL' : ''); }
+
+function addQuery() {
+  const raw = numInput.value.trim();
+  if (!raw) return;
+  const q = normalize(raw);
+  if (!q) {
+    numErr.textContent = `"${raw}" is not a cartridge number. Digits, then optional XL.`;
+    numErr.hidden = false;
+    return;
+  }
+  numErr.hidden = true;
+  if (!queries.some(x => x.number === q.number && x.xl === q.xl)) queries.push(q);
+  numInput.value = '';
+  render();
+}
+
+function render() {
+  chipsEl.innerHTML = '';
+  queries.forEach((q, i) => {
+    const el = document.createElement('div');
+    el.className = 'chip';
+    el.textContent = label(q);
+    const x = document.createElement('span');
+    x.textContent = '\u00d7';
+    x.onclick = () => { queries.splice(i, 1); render(); };
+    el.appendChild(x);
+    chipsEl.appendChild(el);
+  });
+
+  thumbsEl.innerHTML = '';
+  photos.forEach((f, i) => {
+    const el = document.createElement('div');
+    el.className = 'thumb';
+    const img = document.createElement('img');
+    img.src = URL.createObjectURL(f);
+    img.onload = () => URL.revokeObjectURL(img.src);
+    const x = document.createElement('span');
+    x.textContent = '\u00d7';
+    x.onclick = () => { photos.splice(i, 1); render(); };
+    el.append(img, x);
+    thumbsEl.appendChild(el);
+  });
+
+  goBtn.disabled = queries.length === 0 || photos.length === 0;
+}
+
+numInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); addQuery(); }
+});
+numInput.addEventListener('blur', addQuery);
+
+document.getElementById('shoot').onclick = () => document.getElementById('cam').click();
+document.getElementById('pick').onclick  = () => document.getElementById('lib').click();
+
+for (const id of ['cam', 'lib']) {
+  document.getElementById(id).addEventListener('change', e => {
+    photos.push(...e.target.files);   // camera fires once per shot, so append
+    e.target.value = '';              // or the same file cannot be picked twice
+    render();
+  });
+}
+
+goBtn.onclick = async () => {
+  addQuery();
+  if (!queries.length || !photos.length) return;
+
+  goBtn.disabled = true;
+  outEl.innerHTML = '';
+  const t0 = Date.now();
+  const tick = setInterval(() => {
+    statusEl.textContent =
+      `Reading ${photos.length} photo${photos.length > 1 ? 's' : ''}\u2026 ` +
+      `${Math.round((Date.now() - t0) / 1000)}s`;
+  }, 250);
+
+  const body = new FormData();
+  photos.forEach(f => body.append('photos', f));
+  body.append('queries', JSON.stringify(queries));
+
+  try {
+    const res = await fetch('/find', {method: 'POST', body});
+    if (!res.ok) {
+      const detail = await res.text();
+      if (res.status === 401) { location.href = '/login'; return; }
+      throw new Error(`${res.status}: ${detail.slice(0, 200)}`);
+    }
+    show(await res.json());
+    statusEl.textContent = `Done in ${Math.round((Date.now() - t0) / 1000)}s`;
+  } catch (err) {
+    statusEl.textContent = '';
+    outEl.innerHTML = `<div class="err">${err.message}</div>`;
+  } finally {
+    clearInterval(tick);
+    goBtn.disabled = false;
+  }
+};
+
+function show(data) {
+  outEl.innerHTML = '';
+
+  const head = document.createElement('label');
+  head.className = 'hd';
+  head.textContent = 'Results';
+  outEl.appendChild(head);
+
+  for (const r of data.results) {
+    const name = r.number + (r.xl ? 'XL' : '');
+    const top = r.candidates[0];
+    let cls, text;
+    if (r.status === 'found') {
+      cls = 'found';  text = `photo ${top.photo}`;
+    } else if (r.status === 'low_confidence') {
+      cls = 'low';    text = `photo ${top.photo}, low confidence`;
+    } else {
+      cls = 'absent'; text = 'not on the shelf';
+    }
+    const el = document.createElement('div');
+    el.className = 'result';
+    el.innerHTML = `<b>${name}</b><i class="${cls}">${text}</i>`;
+    outEl.appendChild(el);
+  }
+
+  for (const p of data.photos) {
+    const fig = document.createElement('figure');
+    const img = document.createElement('img');
+    img.src = p.annotated_url;
+    img.loading = 'lazy';
+    const cap = document.createElement('figcaption');
+    cap.textContent = `Photo ${p.index}`;
+    fig.append(img, cap);
+    outEl.appendChild(fig);
+  }
+}
+</script>
+</body>
+</html>

@@ -3,3 +3,5 @@ data/
 PROGRESS.md
 jpg/
 eval/
+runs/jobs/
+.env
